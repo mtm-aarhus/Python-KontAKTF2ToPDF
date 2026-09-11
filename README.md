@@ -101,4 +101,4 @@ Mappen er omdøbt, og **`QUEUE_NAME` er skiftet fra `KontAKTGOToPDF` til
 `rel/pdf-content-flattened` findes også, og en fladet PDF er præcis det, der bør
 udleveres efter en overstregning - hvis "flattened" betyder, at annotationer og
 lag er brændt ind. Det er ikke bekræftet, og robotten bruger derfor den
-almindelige `pdf-content`. Se `F2-SPOERGSMAAL-TIL-CBRAIN.md`, del 2, punkt 5.
+almindelige `pdf-content`. Se `MDFiles/F2-SPOERGSMAAL-TIL-CBRAIN.md`, del 2, punkt 5.
