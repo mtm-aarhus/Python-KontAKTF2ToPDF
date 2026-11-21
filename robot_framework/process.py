@@ -1,30 +1,29 @@
-"""KontAKT: hent ét F2-dokument som PDF og læg det i KontAKTs filstore.
+"""KontAKT: hent ét F2-dokument, lav det om til PDF og læg det i KontAKTs filstore.
 
 Queue-driven, ét køelement pr. dokument. For ét F2-dokument:
   1. slår dokumentet op på sit id,
-  2. henter det som PDF - **F2 konverterer selv**,
-  3. POSTer bytes ind i KontAKTs filstore (POST .../store).
+  2. henter ORIGINALEN (``rel/content``),
+  3. laver den om til PDF med ``oomtm.convert`` - den samme vej som alle
+     KontAKTs PDF-robotter (WeasyPrint til mails, HTML, tekst og CSV,
+     LibreOffice til Office, Pillow til billeder),
+  4. POSTer bytes ind i KontAKTs filstore (POST .../store).
 
-Kan F2 ikke konvertere filtypen, lægges originalen op i stedet
-(``uploaded_original``): den bliver stadig udleveret, den kan bare ikke
-OCR-screenes.
+Kan filen ikke laves om (video, lyd, ukendte filtyper, en beskadiget fil),
+lægges originalen op i stedet (``uploaded_original``) med oomtm's grund som
+note: den bliver stadig udleveret, den kan bare ikke screenes.
 
-HELE KONVERTERINGSKÆDEN ER VÆK, OG DET ER F2'S FORTJENESTE
-    GO-udgaven havde tre veje til en PDF: GO's egen konverter først, ellers
-    LibreOffice, ellers Pillow eller en mail-render gennem ``oomtm.pdf`` - plus
-    ``.goref``-pegepinde, der skulle følges til det rigtige dokument, og en
-    ``classify``-tabel over hvad der overhovedet kunne konverteres.
+HVORFOR IKKE F2'S EGEN KONVERTERING (rel/pdf-content)
+    Den virkede (målt: en 52-byte text/plain kom tilbage som en rigtig PDF), og
+    indtil 2026-11 brugte robotten den. Men F2, GO, Nova og mappen gav hver deres
+    PDF af det samme dokument - forskellige skrifter, sider og fejl. Nu laves
+    alle PDF'er af oomtm, og F2 bruges kun til at HENTE originalen. Samme fil
+    giver samme PDF, uanset hvor den kom fra.
 
-    F2 svarer på det med én relation. Hvert dokument bærer ``rel/pdf-content``,
-    og målt: en 52-byte ``text/plain`` kom tilbage som en rigtig PDF på 7966
-    byte. Så robotmaskinen behøver ikke LibreOffice installeret, der er ingen
-    fallback-kæde at holde ved lige, og resultatet er det samme uanset hvilken
-    robotmaskine der spørger - hvilket en lokal LibreOffice aldrig kunne love.
+    Er dokumentet ALLEREDE en PDF, lader oomtm den være, som den er: det er
+    netop den fil, overstregningen senere arbejder på.
 
-    Er dokumentet ALLEREDE en PDF, hentes ``rel/content`` i stedet. Det er ikke
-    en optimering: en PDF, der sendes gennem en konverter igen, kommer ikke
-    nødvendigvis ud som den gik ind, og det er netop den fil, overstregningen
-    senere arbejder på.
+En mails vedhæftede filer er deres egne dokumenter i F2, så en mails PDF er
+bare mailen.
 
 Queue payload (sat af KontAKTs "Hent filer"-udløser):
     {
@@ -48,23 +47,29 @@ OO config:
 from OpenOrchestrator.orchestrator_connection.connection import OrchestratorConnection
 from OpenOrchestrator.database.queues import QueueElement
 import json
+import tempfile
+from pathlib import Path
 from urllib.parse import quote
 
 import requests
 
 from robot_framework import reset
 from robot_framework.exceptions import CaseDeleted
+from oomtm import convert
 from oomtm import f2 as oomtm_f2
 from oomtm import sharepoint as sp  # filename helpers only (build_filename, sanitize_title)
 
-# Filtyper, der ikke skal sendes til konvertering. Ikke fordi F2 ville svare
-# forkert - men en video har ingen PDF-form, og at spoerge er et spildt kald paa
-# noget, vi ved svaret paa.
-UDEN_PDF_FORM = {
-    "mp4", "mov", "avi", "mkv", "wmv", "m4v", "webm", "flv", "mpg", "mpeg",
-    "mp3", "wav", "m4a", "aac", "flac", "ogg", "wma",
-    "zip", "rar", "7z", "tar", "gz", "iso", "exe", "msi", "dll",
+# Har F2-dokumentet ingen FileType, giver ContentType filtypen - oomtm vælger
+# motor efter den.
+ENDELSE_FRA_CONTENTTYPE = {
+    "application/pdf": "pdf",
+    "message/rfc822": "eml",
+    "application/vnd.ms-outlook": "msg",
+    "text/plain": "txt",
+    "text/html": "html",
 }
+
+ORIGINAL_NOTE = "Filen udleveres, som den er, og bliver ikke screenet."
 
 
 # ----- Deleted in KontAKT ----------------------------------------------------
@@ -133,52 +138,29 @@ def _hent_og_gem(oc, client, case_id, doc_id, dok_id, akt_id, title) -> str:
     oc.log_info(f"F2-dokument {dok_id}: {oomtm_f2.text(dok, 'Title')!r} "
                 f".{endelse} {ctype} {oomtm_f2.text(dok, 'Size')} byte")
 
-    data, upload_endelse, status, note = _bytes_til_upload(oc, f2, dok, endelse, ctype)
+    if not endelse:
+        endelse = ENDELSE_FRA_CONTENTTYPE.get(ctype.split(";")[0].strip(), "")
 
-    akt = akt_id if akt_id is not None else 0
-    filnavn = sp.build_filename(akt, dok_id, sp.sanitize_title(title), upload_endelse)
-    _gem(client, case_id, doc_id, data, filnavn,
-         "pdf" if status == "ready" else "original", note)
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        # Et fast, kort navn: titlen kan vaere lang nok til at ramme MAX_PATH.
+        src = work / f"original.{endelse or 'bin'}"
+        src.write_bytes(f2.content(dok))
+        r = convert.convert(src, work / "pdf", log=oc.log_info)
+        if r.ok:
+            upload, upload_endelse, status = r.pdf, "pdf", "ready"
+            # Advarslerne (sporede aendringer, skjulte ark) foelger med PDF'en.
+            note = " ".join(r.warnings)
+        else:
+            oc.log_info(f"oomtm kunne ikke lave .{endelse} om til PDF: {r.note}")
+            upload, upload_endelse, status = src, endelse or "bin", "uploaded_original"
+            note = f"{r.note} {ORIGINAL_NOTE}"
+
+        akt = akt_id if akt_id is not None else 0
+        filnavn = sp.build_filename(akt, dok_id, sp.sanitize_title(title), upload_endelse)
+        _gem(client, case_id, doc_id, upload.read_bytes(), filnavn,
+             "pdf" if status == "ready" else "original", note)
     return status
-
-
-def _bytes_til_upload(oc, f2, dok, endelse, ctype):
-    """(bytes, endelse, status, note) for ét F2-dokument.
-
-    status:
-      * "ready"             - bytes er en PDF
-      * "uploaded_original" - kunne ikke konverteres; originalen lægges op som
-                              den er (bliver stadig udleveret, blot ikke
-                              OCR-screenet)
-    """
-    # Allerede en PDF: hent den som den er. Ikke gennem konverteren - det er
-    # netop den fil, overstregningen senere arbejder paa.
-    if endelse == "pdf" or "pdf" in ctype:
-        return f2.content(dok), "pdf", "ready", ""
-
-    if endelse in UDEN_PDF_FORM:
-        return (f2.content(dok), endelse or "bin", "uploaded_original",
-                f"Filtypen .{endelse} har ingen PDF-form - uploadet som original "
-                f"(bliver ikke OCR-screenet).")
-
-    try:
-        pdf = f2.pdf_content(dok)
-    except oomtm_f2.F2Error as exc:
-        oc.log_info(f"F2 kunne ikke konvertere .{endelse} til PDF "
-                    f"({exc.status}) - lægger originalen op.")
-        return (f2.content(dok), endelse or "bin", "uploaded_original",
-                f"F2 kunne ikke konvertere .{endelse} til PDF - uploadet som "
-                f"original (bliver ikke OCR-screenet).")
-    # F2 svarede 200, men et tomt svar er ikke en PDF. Maalt at et rigtigt svar
-    # begynder med %PDF-, saa den er der god grund til at tjekke: en tom fil, der
-    # bliver gemt som "ready", ville se udleveringsklar ud og vaere ubrugelig.
-    if not pdf[:5] == b"%PDF-":
-        oc.log_info(f"F2's pdf-content for .{endelse} var ikke en PDF "
-                    f"({len(pdf)} byte) - lægger originalen op.")
-        return (f2.content(dok), endelse or "bin", "uploaded_original",
-                "F2's PDF-konvertering gav ikke en PDF - uploadet som original "
-                "(bliver ikke OCR-screenet).")
-    return pdf, "pdf", "ready", ""
 
 
 def _gem(client, case_id, doc_id, data: bytes, filnavn: str, kind: str, note=""):

@@ -28,13 +28,17 @@ classifiers = [
 # en gren flytter sig - og saa er det ikke laengere laast. En commit er.
 dependencies = [
     "OpenOrchestrator == 3.*",
-    "oomtm @ git+https://github.com/mtm-aarhus/oomtm.git@e4cc2d7c4f5090b78688ebab0a0eed624ddd1df1",
+    # oomtm b386b55: PDF'er laves med oomtm.convert (WeasyPrint til mails,
+    # HTML, tekst og CSV; LibreOffice til Office). [pdf] giver motorernes
+    # pakker; motorerne selv installeres uden admin ved første kørsel.
+    "oomtm[pdf] @ git+https://github.com/mtm-aarhus/oomtm.git@b386b557439ae47228325f647d96750e41a6ffd8",
     "requests == 2.34.2",
     "Pillow == 10.4.0",
 ]
-# INGEN LIBREOFFICE. F2 renderer selv til PDF (rel/pdf-content), saa der er
-# ingen konvertering paa robotmaskinen, ingen 350 MB at hente foerste gang og
-# ingen fallback-kaede at holde ved lige. Derfor "oomtm" og ikke "oomtm[pdf]".
+# F2's egen konvertering (rel/pdf-content) bruges ikke laengere: alle KontAKTs
+# PDF'er laves af oomtm.convert, saa samme fil giver samme PDF, uanset kilden.
+# Derfor "oomtm[pdf]". Motorerne installeres uden admin ved foerste koersel,
+# én gang pr. maskine (LibreOffice ~350 MB, WeasyPrints biblioteker ~30 MB).
 #
 # Pillow bliver: robot_framework/error_screenshot.py importerer PIL, saa den er
 # en kerneafhaengighed for HVER robot og maa aldrig fjernes.

@@ -1,7 +1,7 @@
 # Python-KontAKTF2ToPDF
 
-Henter **ét F2-dokument som PDF** og lægger det i KontAKTs filstore, så det kan
-screenes, overstreges og udleveres.
+Henter **ét F2-dokument**, laver det om til PDF med `oomtm.convert` og lægger
+det i KontAKTs filstore, så det kan screenes, overstreges og udleveres.
 
 Køstyret, ét element pr. dokument. Sat i kø af KontAKTs "Overfør filer" og
 "Genhent valgte filer".
@@ -9,45 +9,45 @@ Køstyret, ét element pr. dokument. Sat i kø af KontAKTs "Overfør filer" og
 > Robotten hed `Python-KontAKTGOToPDF`. **Køen heder nu `KontAKTF2ToPDF`** - se
 > "Udrulning" nederst.
 
-## Hele konverteringskæden er væk
+## F2 henter, oomtm laver PDF'en
 
-GO-udgaven havde tre veje til en PDF: GO's egen konverter først (autoritativ,
-klarede mails og Office), ellers LibreOffice headless, ellers Pillow eller en
-mail-render gennem `oomtm.pdf`. Plus `.goref`-pegepinde, der skulle følges til
-det rigtige dokument, og en `classify`-tabel over hvad der overhovedet kunne
-konverteres.
+1. Dokumentet slås op på sit id.
+2. **Originalen** hentes (`rel/content`).
+3. Den laves om til PDF med [`oomtm.convert`](https://github.com/mtm-aarhus/oomtm),
+   den samme vej som alle KontAKTs PDF-robotter: WeasyPrint til mails, HTML,
+   tekst og CSV, LibreOffice til Office, Pillow til billeder. En PDF lades være,
+   som den er: det er netop den fil, overstregningen senere arbejder på.
+4. Bytes lægges i KontAKTs filstore (`/store`).
 
-F2 svarer på det med én link-relation. Hvert dokument bærer `rel/pdf-content`,
-og det er målt: en 52-byte `text/plain` kom tilbage som en rigtig PDF på 7966
-byte (`pdf-content-flattened` gav 8526).
+Filtypen kommer fra F2's `FileType`, og fra `ContentType`, hvis `FileType` er
+tom (fx `message/rfc822` → `.eml`).
 
-Det betyder tre ting:
+## Hvorfor ikke F2's egen konvertering
 
-1. **Robotmaskinen behøver ikke LibreOffice.** Ingen 350 MB at hente første
-   gang, ingen MSI-udpakning uden administratorrettigheder, ingen
-   `LIBREOFFICE_PATH` at sætte. `oomtm[pdf]` er ikke længere en afhængighed.
-2. **Ingen fallback-kæde at holde ved lige.**
-3. **Resultatet er det samme, uanset hvilken robotmaskine der spørger** - hvilket
-   en lokalt installeret LibreOffice aldrig kunne love.
+Indtil 2026-11 hentede robotten F2's PDF (`rel/pdf-content`). Den virkede (målt:
+en 52-byte `text/plain` kom tilbage som en rigtig PDF på 7966 byte), men F2, GO,
+Nova og mappen gav hver deres PDF af det samme dokument: forskellige skrifter,
+sider og fejl. Nu laves alle PDF'er af oomtm, og F2 bruges kun til at hente
+originalen. Samme fil giver samme PDF, uanset hvor den kom fra.
 
-## Er dokumentet allerede en PDF, hentes den som den er
+Prisen er, at robotmaskinen skal have oomtm's motorer. `reset.open_all` sørger
+for det ved første kørsel, uden admin og én gang pr. maskine: LibreOffice
+(~350 MB) og WeasyPrints biblioteker (~30 MB), begge fra
+[oomtm_setup](https://github.com/mtm-aarhus/oomtm_setup) først.
 
-`rel/content` og ikke `rel/pdf-content`. Det er ikke en optimering: en PDF, der
-sendes gennem en konverter igen, kommer ikke nødvendigvis ud som den gik ind, og
-det er netop den fil, overstregningen senere arbejder på.
+## Når filen ikke kan blive en PDF
 
-## Når F2 ikke kan konvertere
+Så lægges **originalen** op i stedet (`uploaded_original`) med oomtm's grund som
+note: den bliver stadig udleveret, den kan bare ikke screenes. Det gælder video,
+lyd, arkiver, ukendte filtyper og beskadigede filer.
 
-Så lægges **originalen** op i stedet (`uploaded_original`): den bliver stadig
-udleveret, den kan bare ikke OCR-screenes. Det gælder tre tilfælde:
+**Ser I en filtype fra F2, som burde kunne blive en PDF, men bliver original**,
+så skal den tilføjes i `oomtm.convert` (og i KontAKTs `app/mappe_pdf.py`).
+F2's egen konvertering er bevidst ikke en reserve: så ville den samme filtype
+give forskellige PDF'er.
 
-- **Filtyper uden PDF-form** - video, lyd, arkiver, binære filer. De sendes ikke
-  til konvertering: en video har ingen PDF-form, og at spørge er et spildt kald
-  på noget, vi kender svaret på.
-- **F2 afviser** (`rel/pdf-content` svarer med en fejl).
-- **F2 svarer 200 med noget, der ikke er en PDF.** Robotten tjekker for `%PDF-`.
-  Uden det tjek ville en tom fil blive gemt som `ready`, se udleveringsklar ud og
-  være ubrugelig - og det ville først blive opdaget af ansøgeren.
+En mails vedhæftede filer er deres egne dokumenter i F2, så en mails PDF er bare
+mailen.
 
 ## Input
 
@@ -84,6 +84,7 @@ udleveret, den kan bare ikke OCR-screenes. Det gælder tre tilfælde:
 - `oomtm.sharepoint` bruges **kun** til to rene strengfunktioner,
   `build_filename` og `sanitize_title`, så filnavnene bliver de samme som før.
   SharePoint er ude af KontAKT; det er navnekonventionen, der er tilbage.
+- `oomtm.convert` (med `[pdf]`) laver PDF'erne.
 - `Pillow` bliver: `robot_framework/error_screenshot.py` importerer PIL, så den
   er en kerneafhængighed for hver robot.
 
@@ -95,10 +96,3 @@ Mappen er omdøbt, og **`QUEUE_NAME` er skiftet fra `KontAKTGOToPDF` til
 1. git-remoten i `.git/config` peger stadig på det gamle repositorienavn.
 2. OO-processen og dens udløser skal pege på den nye kø.
 3. Køelementer i den gamle kø bliver ikke læst af nogen.
-
-## Uafklaret
-
-`rel/pdf-content-flattened` findes også, og en fladet PDF er præcis det, der bør
-udleveres efter en overstregning - hvis "flattened" betyder, at annotationer og
-lag er brændt ind. Det er ikke bekræftet, og robotten bruger derfor den
-almindelige `pdf-content`. Se `MDFiles/F2-SPOERGSMAAL-TIL-CBRAIN.md`, del 2, punkt 5.

@@ -9,6 +9,7 @@ logging in to F2 for every single queue element.
 from OpenOrchestrator.orchestrator_connection.connection import OrchestratorConnection
 
 from oomtm import f2 as oomtm_f2
+from oomtm import convert, engines
 
 
 class Client:
@@ -50,6 +51,8 @@ def clean_up(orchestrator_connection: OrchestratorConnection) -> None:
 def close_all(orchestrator_connection: OrchestratorConnection) -> None:
     """Gracefully close all applications used by the robot."""
     orchestrator_connection.log_trace("Closing all applications.")
+    # oomtm's WeasyPrint-proces (den lukker også selv, når robotten slutter).
+    engines.close_workers()
 
 
 def kill_all(orchestrator_connection: OrchestratorConnection) -> None:
@@ -60,4 +63,9 @@ def kill_all(orchestrator_connection: OrchestratorConnection) -> None:
 def open_all(orchestrator_connection: OrchestratorConnection) -> Client:
     """Open all connections used by the robot and return them as a :class:`Client`."""
     orchestrator_connection.log_trace("Opening F2 connection.")
+    # oomtm's PDF-motorer (WeasyPrint og LibreOffice): findes de ikke, installeres
+    # de nu, uden admin, én gang pr. maskine - så en manglende motor ses her og
+    # ikke midt i en sag.
+    motorer = convert.ensure_engines(log=orchestrator_connection.log_info)
+    orchestrator_connection.log_info(f"PDF-motorer klar: {motorer}")
     return Client(orchestrator_connection)
