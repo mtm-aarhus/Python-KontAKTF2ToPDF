@@ -146,7 +146,12 @@ def _hent_og_gem(oc, client, case_id, doc_id, dok_id, akt_id, title) -> str:
         # Et fast, kort navn: titlen kan vaere lang nok til at ramme MAX_PATH.
         src = work / f"original.{endelse or 'bin'}"
         src.write_bytes(f2.content(dok))
-        r = convert.convert(src, work / "pdf", log=oc.log_info)
+        hoved = _mailhoved(oc, f2, dok, dok_id, endelse)
+        if hoved is not None:
+            r = convert.convert_mail(_som_mail(hoved, src, endelse), work / "pdf",
+                                     log=oc.log_info)
+        else:
+            r = convert.convert(src, work / "pdf", log=oc.log_info)
         if r.ok:
             upload, upload_endelse, status = r.pdf, "pdf", "ready"
             # Advarslerne (sporede aendringer, skjulte ark) foelger med PDF'en.
@@ -161,6 +166,86 @@ def _hent_og_gem(oc, client, case_id, doc_id, dok_id, akt_id, title) -> str:
         _gem(client, case_id, doc_id, upload.read_bytes(), filnavn,
              "pdf" if status == "ready" else "original", note)
     return status
+
+
+# ----- en mail i F2: teksten paa dokumentet, hovedet paa akten ----------------
+#
+# 2026-11-24: "when you convert mails to pdf make sure you add to/from/cc/subject
+# to the top of a mail, regardless if it's a mail received in kontakt, or a mail
+# fetched from f2/go/nova case."
+#
+# En .eml/.msg baerer sit eget hoved, og oomtm saetter det paa (Fra, Sendt, Til,
+# Cc, Emne) - det gaelder mails fra GO, Nova og mapper. Men en mail i F2 er en
+# AKT: mailens tekst er aktens dokument (HTML), og afsender, modtagere, emne og
+# dato staar paa akten. PDF'en af dokumentet alene var bare teksten, uden at man
+# kunne se, hvem der skrev til hvem. Saa hentes akten, og hovedet saettes paa.
+
+# Filtyper, der er mailens TEKST og ikke et dokument for sig. En PDF eller et
+# Word-dokument paa en indgaaende akt er et brev, og det roeres ikke; en .msg/.eml
+# har sit eget hoved.
+_TEKST_TYPER = {"html", "htm", "txt"}
+
+
+def _mailhoved(oc, f2, dok, dok_id: str, endelse: str):
+    """Aktens mailhoved (oomtm.f2.mail_fields), hvis dokumentet er en mails
+    tekst - ellers None, og dokumentet laves om som foer."""
+    if endelse not in _TEKST_TYPER:
+        return None
+    if not (hasattr(oomtm_f2, "mail_fields") and hasattr(convert, "convert_mail")):
+        # oomtm er fra foer 2026-11-24. Saa laves mailen om som foer, uden hoved.
+        oc.log_info("oomtm er for gammel til at sætte mailhovedet på en F2-mail. "
+                    "Opdatér oomtm-versionen i robottens pyproject.toml.")
+        return None
+    op = oomtm_f2.links(dok).get("up", "")
+    if not op:
+        return None
+    try:
+        akt = f2.get(op)
+    except oomtm_f2.F2Error as exc:
+        oc.log_info(f"F2-dokument {dok_id}: akten kunne ikke hentes ({exc.status}) "
+                    f"- laves om uden mailhoved.")
+        return None
+    # Kun aktens EGET dokument. Et bilag paa en mail-akt (en .txt, nogen har
+    # vedhaeftet) er ikke mailen og skal ikke have dens hoved.
+    if oomtm_f2.main_document_id(akt) != str(dok_id):
+        return None
+    return oomtm_f2.mail_fields(akt)
+
+
+def _som_mail(hoved: dict, src: Path, endelse: str):
+    """En oomtm.mail.Mail af aktens hoved og dokumentets tekst."""
+    from oomtm import mail as oomtm_mail
+    data = src.read_bytes()
+    html = oomtm_mail.decode_html_bytes(data) if endelse in ("html", "htm") else None
+    tekst = None if html is not None else oomtm_mail.decode_text_bytes(data)
+    return oomtm_mail.Mail(
+        subject=hoved.get("subject") or "", sender=hoved.get("sender") or "",
+        to=hoved.get("to") or "", cc=hoved.get("cc") or "",
+        date=_f2_tid(hoved.get("date")), date_label=hoved.get("date_label") or "Sendt",
+        html=html, text=tekst)
+
+
+def _f2_tid(vaerdi):
+    """F2's "2026-09-07T15:24:55.773" (dansk tid, ingen zone) -> datetime.
+
+    Uden zone vises den, som den er - det ER dansk tid. Med zone laver oomtm den
+    om til dansk tid."""
+    from datetime import datetime
+    s = str(vaerdi or "").strip().replace("Z", "+00:00")
+    if not s:
+        return None
+    if "." in s[19:26]:
+        # Broekdele af sekunder: Python 3.10 tager kun 3 eller 6 cifre.
+        hoved, rest = s[:19], s[19:]
+        zone = ""
+        for tegn in ("+", "-"):
+            if tegn in rest:
+                zone = rest[rest.index(tegn):]
+        s = hoved + zone
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        return None
 
 
 def _gem(client, case_id, doc_id, data: bytes, filnavn: str, kind: str, note=""):

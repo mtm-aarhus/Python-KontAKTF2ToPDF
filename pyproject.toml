@@ -31,7 +31,9 @@ dependencies = [
     # oomtm b386b55: PDF'er laves med oomtm.convert (WeasyPrint til mails,
     # HTML, tekst og CSV; LibreOffice til Office). [pdf] giver motorernes
     # pakker; motorerne selv installeres uden admin ved første kørsel.
-    "oomtm[pdf] @ git+https://github.com/mtm-aarhus/oomtm.git@b386b557439ae47228325f647d96750e41a6ffd8",
+    # oomtm 07008ca: mail_fields og convert.convert_mail, så en F2-mail får
+    # Fra, Til, Cc, Emne og dato øverst i PDF'en.
+    "oomtm[pdf] @ git+https://github.com/mtm-aarhus/oomtm.git@07008cae0c86090ca336f0148496ee5ef0694b4c",
     "requests == 2.34.2",
     "Pillow == 10.4.0",
 ]
